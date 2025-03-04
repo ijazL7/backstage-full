@@ -85,3 +85,41 @@ When defining `eventId` and `subEventId` for your audit events, follow these gui
 - Use `subEventId` to further categorize events within a logical group. For example, if the `eventId` is "fetch", the `subEventId` could be "by-id" or "by-location" to specify the method used for fetching.
 - Avoid redundant prefixes related to the plugin ID, as that context is already provided.
 - Choose names that clearly and concisely describe the event being audited.
+
+## Severity Log Level Mappings
+
+The Auditor Service provides a way for plugins to log significant events, categorized by their severity. The `severityLogLevelMappings` configuration option enables you to customize how these severity levels are mapped to actual log levels within your Backstage backend, giving you precise control over the verbosity of your audit logs.
+
+### Configuration
+
+The `severityLogLevelMappings` are configured under the `backend.auditor` section of your `app-config.yaml` file. This structure allows you to specify the log level for each severity level supported by the Auditor Service. You can override individual severity levels without changing the entire mapping.
+
+Example configuration:
+
+```yaml
+backend:
+  auditor:
+    severityLogLevelMappings:
+      low: debug
+      medium: info
+      high: warn
+      critical: error
+```
+
+### Severity Levels and Default Mappings
+
+The Auditor Service supports the following severity levels:
+
+- `low`: Represents low-importance events, typically informational or debug-level.
+- `medium`: Represents events of moderate importance, requiring some attention.
+- `high`: Represents high-importance events, potentially indicating a problem or security issue.
+- `critical`: Represents critical events, requiring immediate attention.
+
+By default, these severity levels are mapped to the following log levels:
+
+- `low`: `debug`
+- `medium`: `info`
+- `high`: `info`
+- `critical`: `info`
+
+As a result, medium, high, and critical events are logged as info-level events by default, while low-level events are treated as debug.
