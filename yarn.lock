@@ -5564,7 +5564,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"@backstage/plugin-catalog-backend-module-github-org@workspace:plugins/catalog-backend-module-github-org":
+"@backstage/plugin-catalog-backend-module-github-org@workspace:^, @backstage/plugin-catalog-backend-module-github-org@workspace:plugins/catalog-backend-module-github-org":
   version: 0.0.0-use.local
   resolution: "@backstage/plugin-catalog-backend-module-github-org@workspace:plugins/catalog-backend-module-github-org"
   dependencies:
@@ -9815,14 +9815,14 @@ __metadata:
   linkType: hard
 
 "@google-cloud/cloud-sql-connector@npm:^1.4.0":
-  version: 1.6.1
-  resolution: "@google-cloud/cloud-sql-connector@npm:1.6.1"
+  version: 1.6.0
+  resolution: "@google-cloud/cloud-sql-connector@npm:1.6.0"
   dependencies:
     "@googleapis/sqladmin": ^24.0.0
     gaxios: ^6.1.1
     google-auth-library: ^9.2.0
     p-throttle: ^7.0.0
-  checksum: a39c93029ef0ca0462f3a4d0d5ef503cb2c5cd8ffa99952429336005b017933688909f6c937ac1f65ad2d5c2285f0c91c0f04781830b3fe8b8864abbaa495f56
+  checksum: 62acc32cadebf45ccb5a87516e1bc4c97d3f948c15997d3f081298cda0d420f191024341abe3a2f521132ebde60aed9ba529695e087d3b5750e943ac0a7c2c97
   languageName: node
   linkType: hard
 
@@ -19240,13 +19240,13 @@ __metadata:
   linkType: hard
 
 "@types/dockerode@npm:^3.3.0, @types/dockerode@npm:^3.3.29":
-  version: 3.3.35
-  resolution: "@types/dockerode@npm:3.3.35"
+  version: 3.3.34
+  resolution: "@types/dockerode@npm:3.3.34"
   dependencies:
     "@types/docker-modem": "*"
     "@types/node": "*"
     "@types/ssh2": "*"
-  checksum: a59b7637de3a572bf4d41dc0cba3be75f14a734ae6e5f79c7f17dbfd1f100e507008f5a6b6aac657ccd13e67dd5d2cf6ee4608ded5ce97021737125d110a1d3b
+  checksum: 0cb35276fc76ee8ae9d6db7054198e23370f753894d06aa56efbf232032009c6f63a3bfce9d71e6272f3240040d9da2d2a56671d24f34e598ff2000df946ecbd
   languageName: node
   linkType: hard
 
@@ -28701,6 +28701,8 @@ __metadata:
     "@backstage/plugin-auth-node": "workspace:^"
     "@backstage/plugin-catalog-backend": "workspace:^"
     "@backstage/plugin-catalog-backend-module-backstage-openapi": "workspace:^"
+    "@backstage/plugin-catalog-backend-module-github": "workspace:^"
+    "@backstage/plugin-catalog-backend-module-github-org": "workspace:^"
     "@backstage/plugin-catalog-backend-module-openapi": "workspace:^"
     "@backstage/plugin-catalog-backend-module-scaffolder-entity-model": "workspace:^"
     "@backstage/plugin-catalog-backend-module-unprocessed": "workspace:^"
