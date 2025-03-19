@@ -4,6 +4,7 @@ status: provisional
 authors:
   - 'bnechyporenko@bol.com'
   - 'benjaminl@spotify.com'
+  - 'kurtaking@gmail.com'
 owners:
   - '@backstage/scaffolder-maintainers'
 project-areas:
@@ -11,9 +12,9 @@ project-areas:
 creation-date: 2024-03-13
 ---
 
-# BEP: <!-- Your short, descriptive title -->
+# BEP: Scaffolder Action Rollback
 
-[**Discussion Issue**](https://github.com/backstage/backstage/issues/NNNNN)
+[**Discussion Issue**](https://github.com/backstage/backstage/issues/28818)
 
 - [Summary](#summary)
 - [Motivation](#motivation)
@@ -21,6 +22,11 @@ creation-date: 2024-03-13
   - [Non-Goals](#non-goals)
 - [Proposal](#proposal)
 - [Design Details](#design-details)
+  - [Auditing and Permissions](#auditing-and-permissions)
+  - [Securing Rollbacks](#securing-rollbacks)
+  - [Rollback mechanism](#rollback-mechanism)
+  - [WorkflowRunner changes](#workflowrunner-changes)
+  - [Enabling rollback for a step when writing a template](#enabling-rollback-for-a-step-when-writing-a-template)
 - [Release Plan](#release-plan)
 - [Dependencies](#dependencies)
 - [Alternatives](#alternatives)
@@ -31,34 +37,282 @@ Introducing the rollback to scaffolder actions provides the mean to come back to
 
 ## Motivation
 
-The aim is to help to mitigate the issue of manual clean up the partially created resources.
+Mitigate the issue of manual clean up from partially created resources during template execution failures. When a template execution fails after creating a number of resources but before completing, the system is left in an inconsistent state. Currently, there is no standardized way to clean up these partially created resources, leading to orphaned resources in external systems requiring manual cleanup.
 
 ### Goals
 
-- We will extend action's API to be able to run rollback for failed tasks
-- Rollback will be optional
+- Provide a standardized, optional rollback mechanism for scaffolder actions
+- Enable proper cleanup of resources created in third-party systems when template execution fails
+- Improve the developer experience by reducing manual intervention for cleanup after failures
+- Provide a clear indicator of which actions have rollbacks in the UI (/create/actions)
+- Provide override options when possible
+- Ensure auditing is a first class concern
 
 ### Non-Goals
 
-We will not cover all built-in actions with a rollback functionality
+- Modifying existing actions to implement rollback (this proposal only provides the framework)
+- Adding automatic rollback triggers for all possible error scenarios
 
 ## Proposal
 
 Rollback is going to be performed:
 
-- when user manually decide to perform this action.
-- task has to be recovered and TaskRecoverStrategy set to 'rollback'
+- on template execution failure
+- for each step when rollback is enabled and the correlating action includes a rollback function
+- and possibly incorporate when `TaskRecoverStrategy` set to 'rollback' (needs more research)
 
 ## Design Details
 
-We are going to introduce an extra function in action API which will look like:
+### Auditing and Permissions
+
+1. Implement the AuditorService for key operations
+1. Add a rollback permission definition with permission checks in the NunjucksWorkflowRunner
+1. Add a specific rule for rollback operations to `scaffolderActionRules` ([ref](https://github.com/backstage/backstage/blob/85df833fe33c45cf2ad8e0322dafb118b89a5ea8/plugins/scaffolder-backend/src/service/rules.ts#L133-L138))
+
+### Securing Rollbacks
+
+For actions that require additional security checks during rollback, we provide an optional helper function that encapsulates the logic of verifying the resource and executing the rollback. This helper is not required, but can be useful when you need to ensure resources being rolled back match what was originally created.
+
+The helper function handles:
+
+1. Verifying we reached the point of setting output
+1. Parsing resource details from the output and validating them against the input
+1. Executing the actual rollback with the validated resource
+
+The solution aims to only operate on resources that were actually created by the action.
+
+```typescript
+export function createSecureRollback
+  TActionInput extends JsonObject,
+  TActionOutput extends JsonObject,
+  TSchemaType extends 'v1' | 'v2'
+>(
+  rollbackFn: (
+    ctx: ActionContext<TActionInput, TActionOutput, TSchemaType>,
+    resource: { id: string; type: string; metadata?: JsonObject }
+  ) => Promise<void>,
+  options: {
+    // Required resource identifier from the output
+    outputKey: keyof TActionOutput;
+    // Function to parse resource details from the output
+    parseResource: (value: JsonValue) => { id: string; type: string; metadata?: JsonObject };
+    // Validation to ensure resource matches input
+    validateResource: (
+      resource: { id: string; type: string; metadata?: JsonObject },
+      input: TActionInput
+    ) => boolean;
+  }
+) {
+  return async (ctx: ActionContext<TActionInput, TActionOutput, TSchemaType>) => {
+    // 1. Verify we reached the point of setting output
+    const outputValue = ctx.output?.values?.[options.outputKey];
+    if (outputValue === undefined) {
+      ctx.logger.info(`Skipping rollback: no resource was created (no value for ${String(options.outputKey)} in output)`);
+      return;
+    }
+
+    // 2. Parse resource details from the output
+    const resource = options.parseResource(outputValue);
+
+    // 2. Verify the resource matches what would have been created from the input
+    if (!options.validateResource(resource, ctx.input)) {
+      ctx.logger.error(
+        `Security check failed: output resource ${resource.id} doesn't match expected value from input parameters`
+      );
+      throw new Error(`Resource validation failed during rollback of ${resource.type}`);
+    }
+
+    try {
+      // 4. Execute the actual rollback with the validated resource
+      ctx.logger.info(`Rolling back ${resource.type} with id ${resource.id}`);
+      await action.rollback(ctx);
+      ctx.logger.info(`Successfully rolled back ${resource.type} with id ${resource.id}`);
+    } catch (error) {
+      ctx.logger.error(
+        `Failed to rollback ${resource.type} with id ${resource.id}: ${error}`,
+      );
+      ctx.logger.info('Continuing with next rollback...');
+    }
+  };
+}
+```
+
+Implementers must provide a method to parse the resource details from the output and a method to validate the resource details against the input. An example implementation looks like
+
+```typescript
+handler: async (ctx) => {
+  const { owner, repo } = ctx.input;
+  ctx.output.repoUrl = await githubClient.repos.create({ owner, repo });
+},
+rollback: createSecureRollback(
+  async (ctx, resource) => {
+    // Execute the actual deletion using the validated resource
+    const { owner, repo } = resource.metadata;
+    await githubClient.repos.delete({ owner, repo });
+  },
+  {
+    outputKey: 'repoUrl',
+    parseResource: repoUrl => {
+      const { owner, repo } = parseRepoUrl(repoUrl, integrations);
+
+      // the rollback function only knows about the resource details returned here
+      return {
+        id: repoUrl,
+        type: 'github-repository',
+        metadata: { owner, repo },
+      };
+    },
+    validateResource: (resource, input) => {
+      const { owner, repo } = resource.metadata;
+      return owner === input.owner && repo === input.repoName;
+    },
+  },
+);
+```
+
+### Rollback mechanism
+
+The rollback mechanism will be implemented by extending the existing `TemplateAction` [type](https://github.com/backstage/backstage/blob/946721733c1bc76059a12163503c4e959df4ec34/plugins/scaffolder-node/report.api.md?plain=1#L510-L529) to include an optional rollback function:
+
+```typescript
+export type TemplateAction<
+  TActionInput extends JsonObject = JsonObject,
+  TActionOutput extends JsonObject = JsonObject,
+  TSchemaType extends 'v1' | 'v2' = 'v1',
+> = {
+  ...,
+  handler: (
+    ctx: ActionContext<TActionInput, TActionOutput, TSchemaType>,
+  ) => Promise<void>;
+  rollback?: (
+    ctx: ActionContext<TActionInput, TActionOutput, TSchemaType>,
+  ) => Promise<void>;
+};
+```
+
+The template action options will be updated to include the rollback function:
+
+```typescript
+export type TemplateActionOptions<
+  ...
+  handler: (
+    ctx: ActionContext<TActionInput, TActionOutput, TSchemaType>,
+  ) => Promise<void>;
+  rollback?: (
+    ctx: ActionContext<TActionInput, TActionOutput, TSchemaType>,
+  ) => Promise<void>;
+};
+```
+
+Implementers provide the rollback function when calling `createTemplateAction`.
 
 ```typescript
 const createPublishGitHubAction = createTemplateAction({
   id: 'publish:github',
+  ...,
   async handler() {},
-  async rollback() {},
+  rollback: createSecureRollback(
+    async (ctx, resource) => {
+      await githubClient.repos.delete({ owner, repo });
+    },
+    {
+      outputKey: 'repoUrl',
+      parseResource: repoUrl => {
+        const { owner, repo } = parseRepoUrl(repoUrl, integrations);
+        return { id: repoUrl, type: 'github-repository', metadata: { owner, repo } };
+      },
+      validateResource: (resource, input) => {
+        return owner === input.owner && repo === input.repoName;
+      },
+    },
+  ),
 });
+```
+
+#### Example scenario
+
+The rollback will be performed in the reverse order of the execution. For example, if the following actions are executed, where the rollback is provided for the last 3 actions:
+
+- create a repository (no rollback provided)
+- create a pull request (rollback provided)
+- create a branch (rollback provided)
+- create third party resource (rollback provided)
+
+The rollback will be performed in the following order:
+
+- delete the third party resource
+- delete the branch
+- delete the pull request
+
+The repository will not be deleted because the rollback is not provided for it.
+
+### WorkflowRunner changes
+
+The NunjucksWorkflowRunner will be modified to track successfully completed actions with their rollback function. When a scaffolder task fails, the system will invoke the rollback function for any actions that:
+
+1. Were successfully executed
+1. Provide a rollback implementation
+
+The rollback execution will follow a reverse order (LIFO approach) from the original execution, ensuring dependent resources are cleaned up properly. Rollback failures will be logged, but not fail the overall
+task of rolling back. This means that if one rollback function fails, it will be logged and the next rollback function will be attempted. This will be the default behavior, but we can provided configuration to override.
+
+```typescript
+const completedActionsWithRollback: Array<{
+  action: TemplateAction;
+  ctx: ActionContext<any, any, any>;
+  step: TaskStep;
+}> = [];
+```
+
+```typescript
+const completedActionsWithRollback = [];
+
+async executeStep(
+  task: TaskContext,
+  step: TaskStep,
+  context: TemplateContext,
+  ...
+) {
+  // ...
+  await action.handler(ctx);
+
+  if (action.rollback && !task.isDryRun) {
+    completedActionsWithRollback.push({ action, ctx, step });
+  }
+
+  // ...
+}
+```
+
+In case of a failure, the workflow runner will invoke the rollback function for each of the completed actions.
+
+```ts
+for (const { action, ctx, step } of [
+  ...this.completedActionsWithRollback,
+].reverse()) {
+  if (action.rollback) {
+    await action.rollback(ctx);
+  }
+}
+```
+
+### Enabling rollback for a step when writing a template
+
+Rollbacks are disabled by default. Perhaps we can add a `dangerouslyEnableRollback` flag to the `NunjucksWorkflowRunner` to opt-in to this behavior, but this is not yet decided.
+
+We will leave it up to the template author to enable the rollback for a given step by setting a rollback property to `true`. If the action does not provide a rollback function, the property will be ignored.
+
+```yaml
+steps:
+...
+- id: step-id
+  name: Step name
+  action: action:id
+  // ...
+  input:
+    // ...
+  // reminder this is optional, and defaults to false - it also has no effect if the action does not provide a rollback function
+  rollback: true
 ```
 
 ## Release Plan
@@ -69,16 +323,20 @@ This section should describe the rollout process for any new features. It must t
 If there is any particular feedback to be gathered during the rollout, this should be described here as well.
 -->
 
+This feature enhancement will be optional, ensuring we maintain backwards compatibility. It will be released as an opt in feature for both action maintainers and template authors. It can initially be
+released as part of the [experimental features](https://backstage.io/docs/features/software-templates/experimental).
+
+We will update the documentation to include:
+
+- Description of the rollback feature
+- Usage examples
+- Best practices
+
 ## Dependencies
 
-<!--
-List any dependencies that this work has on other BEPs or features.
--->
+- Possibly experimental task execution checkpoints ([docs](https://backstage.io/docs/features/software-templates/writing-custom-actions/#using-checkpoints-in-custom-actions-experimental))
 
 ## Alternatives
 
-<!--
-What other approaches did you consider, and why did you rule them out? These do
-not need to be as detailed as the proposal, but should include enough
-information to express the idea and why it was not acceptable.
--->
+- Create a separate action that is called as a parameter to the template step
+- Allow the template author to specify a rollback mechanism for each step
